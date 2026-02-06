@@ -37,7 +37,11 @@ async def main():
             print("=" * 50)
             tool_result = await session.list_tools()
             for tool in tool_result.tools:
-                print(f"  - {tool.name}: {tool.description}")
+                print(f"  - {tool.name}")
+                if hasattr(tool, 'inputSchema') and tool.inputSchema:
+                    props = tool.inputSchema.get('properties', {})
+                    if props:
+                        print(f"    Parameters: {list(props.keys())}")
             print()
 
             # List available resources
@@ -46,18 +50,37 @@ async def main():
             print("=" * 50)
             try:
                 resource_result = await session.list_resources()
-                for resource in resource_result.resources:
-                    print(f"  - {resource.uri}: {resource.name}")
+                if resource_result.resources:
+                    for resource in resource_result.resources:
+                        print(f"  - {resource.uri}")
+                        print(f"    Name: {resource.name}")
+                else:
+                    print("  (No static resources - use query tool to explore)")
             except Exception as e:
                 print(f"  Could not list resources: {e}")
             print()
 
-            # Test the list_tables_tool
+            # Test the query tool - list tables
             print("=" * 50)
-            print("Testing list_tables_tool:")
+            print("Testing query tool - List tables:")
             print("=" * 50)
             try:
-                result = await session.call_tool("list_tables_tool", {})
+                result = await session.call_tool("query", {
+                    "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' LIMIT 10"
+                })
+                print(f"Result: {result.content[0].text}")
+            except Exception as e:
+                print(f"Error: {e}")
+            print()
+
+            # Test the query tool - simple query
+            print("=" * 50)
+            print("Testing query tool - SELECT 1:")
+            print("=" * 50)
+            try:
+                result = await session.call_tool("query", {
+                    "sql": "SELECT 1 as test_value, 'MCP Server Working!' as message"
+                })
                 print(f"Result: {result.content[0].text}")
             except Exception as e:
                 print(f"Error: {e}")

@@ -19,9 +19,15 @@ import logging
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse, urlunparse
 
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 import asyncpg
 from mcp.server.fastmcp import FastMCP
-from pydantic import Field
+from mcp.server.fastmcp.resources import FunctionResource
+from mcp.types import Resource
 
 # Configure logging
 logging.basicConfig(
@@ -104,35 +110,18 @@ async def get_connection():
 # Matches original TypeScript: ListResourcesRequestSchema, ReadResourceRequestSchema
 # =============================================================================
 
-@mcp.resource("postgres://{path:path}")
-async def get_table_schema(path: str) -> str:
+async def get_table_schema(table_name: str) -> str:
     """
     Get the schema (columns and data types) for a specific table.
     
-    URI format: postgres://user@host:port/database/table_name/schema
-    
-    This matches the original TypeScript implementation where:
-    - ListResources returns URIs like: postgres://user@host:port/db/table_name/schema
-    - ReadResource parses the URI to extract table_name
+    Matches original TypeScript ReadResourceRequestSchema handler.
     
     Args:
-        path: The path portion containing table_name/schema
+        table_name: Name of the table to get schema for
         
     Returns:
         JSON representation of the table's column definitions
     """
-    # Parse path to extract table_name (matches original TypeScript logic)
-    path_components = path.rstrip("/").split("/")
-    
-    if len(path_components) < 2:
-        return json.dumps({"error": "Invalid resource URI"})
-    
-    schema_marker = path_components[-1]
-    table_name = path_components[-2]
-    
-    if schema_marker != SCHEMA_PATH:
-        return json.dumps({"error": "Invalid resource URI - must end with /schema"})
-    
     async with get_connection() as conn:
         # Matches original: SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1
         rows = await conn.fetch(
@@ -154,36 +143,13 @@ async def get_table_schema(path: str) -> str:
         return json.dumps(columns, indent=2)
 
 
-# Override list_resources to return dynamic table schema URIs
-@mcp.list_resources()
-async def list_resources():
+@mcp.resource("postgres://schema/{table_name}")
+async def table_schema_resource(table_name: str) -> str:
     """
-    List all table schemas as resources.
-    
-    Matches original TypeScript ListResourcesRequestSchema handler:
-    - Queries information_schema.tables for public schema tables
-    - Returns URIs in format: postgres://user@host:port/database/table_name/schema
+    Resource endpoint for table schema.
+    URI format: postgres://schema/table_name
     """
-    resource_base_url = get_resource_base_url()
-    
-    async with get_connection() as conn:
-        # Matches original: SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
-        rows = await conn.fetch(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-        )
-        
-        resources = []
-        for row in rows:
-            table_name = row["table_name"]
-            # URI format: postgres://user@host:port/database/table_name/schema
-            uri = f"{resource_base_url}/{table_name}/{SCHEMA_PATH}"
-            resources.append({
-                "uri": uri,
-                "mimeType": "application/json",
-                "name": f'"{table_name}" database schema',
-            })
-        
-        return resources
+    return await get_table_schema(table_name)
 
 
 # =============================================================================
@@ -234,7 +200,7 @@ async def query(sql: str) -> str:
 # =============================================================================
 
 @mcp.custom_route("/health", methods=["GET"])
-async def health_check():
+async def health_check(request):
     """Health check endpoint for container orchestration."""
     from starlette.responses import JSONResponse
     
