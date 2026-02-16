@@ -4,21 +4,33 @@ Local MCP Client for testing the PostgreSQL MCP Server.
 Usage:
     1. Start the MCP server: python mcp_server.py
     2. Run this client: python mcp_client.py
+
+Environment:
+    MCP_API_KEY: API key for authentication (optional if server has no key configured)
 """
 
 import asyncio
+import os
 from datetime import timedelta
 
+from dotenv import load_dotenv
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+
+# Load environment variables
+load_dotenv()
 
 
 async def main():
     """Test the PostgreSQL MCP server locally."""
     mcp_url = "http://localhost:8000/mcp"
-    headers = {}
+    
+    # Get API key from environment
+    api_key = os.getenv("MCP_API_KEY", "")
+    headers = {"X-API-Key": api_key} if api_key else {}
 
     print(f"Connecting to MCP server at {mcp_url}...")
+    print(f"API Key: {'configured' if api_key else 'not configured (may fail if server requires auth)'}")
     
     async with streamablehttp_client(
         mcp_url, 
@@ -55,17 +67,17 @@ async def main():
                         print(f"  - {resource.uri}")
                         print(f"    Name: {resource.name}")
                 else:
-                    print("  (No static resources - use query tool to explore)")
+                    print("  (No static resources - use postgres_query tool to explore)")
             except Exception as e:
                 print(f"  Could not list resources: {e}")
             print()
 
-            # Test the query tool - list tables
+            # Test the postgres_query tool - list tables
             print("=" * 50)
-            print("Testing query tool - List tables:")
+            print("Testing postgres_query tool - List tables:")
             print("=" * 50)
             try:
-                result = await session.call_tool("query", {
+                result = await session.call_tool("postgres_query", {
                     "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' LIMIT 10"
                 })
                 print(f"Result: {result.content[0].text}")
@@ -73,12 +85,12 @@ async def main():
                 print(f"Error: {e}")
             print()
 
-            # Test the query tool - simple query
+            # Test the postgres_query tool - simple query
             print("=" * 50)
-            print("Testing query tool - SELECT 1:")
+            print("Testing postgres_query tool - SELECT 1:")
             print("=" * 50)
             try:
-                result = await session.call_tool("query", {
+                result = await session.call_tool("postgres_query", {
                     "sql": "SELECT 1 as test_value, 'MCP Server Working!' as message"
                 })
                 print(f"Result: {result.content[0].text}")

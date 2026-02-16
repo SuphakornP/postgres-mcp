@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 # Database configuration from environment variable
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
+# API Key configuration for security
+API_KEY = os.getenv("MCP_API_KEY", "")
+
 # Schema path constant (matches original TypeScript)
 SCHEMA_PATH = "schema"
 
@@ -70,6 +73,7 @@ mcp = FastMCP(
     port=8000,
     stateless_http=True,
 )
+
 
 # Connection pool (initialized lazily)
 _pool: asyncpg.Pool | None = None
@@ -157,21 +161,24 @@ async def table_schema_resource(table_name: str) -> str:
 # Matches original TypeScript: ListToolsRequestSchema, CallToolRequestSchema
 # =============================================================================
 
-@mcp.tool()
-async def query(sql: str) -> str:
+@mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True})
+async def postgres_query(sql: str) -> str:
     """
-    Run a read-only SQL query.
+    Run a read-only SQL query against the PostgreSQL database.
     
-    Matches original TypeScript implementation:
-    - Wraps query in BEGIN TRANSACTION READ ONLY
-    - Always ROLLBACKs after execution
-    - Returns JSON-formatted results
+    This tool executes SELECT queries in a read-only transaction.
+    All queries are automatically rolled back after execution.
     
     Args:
-        sql: The SQL query to execute
+        sql: The SQL SELECT query to execute. Example: "SELECT * FROM users LIMIT 10"
         
     Returns:
-        JSON-formatted query results
+        JSON array of query results. Each row is a JSON object with column names as keys.
+        
+    Errors:
+        - If the query is invalid, returns the PostgreSQL error message
+        - If the table doesn't exist, suggests checking available tables with: 
+          SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
     """
     async with get_connection() as conn:
         try:
@@ -220,7 +227,74 @@ async def health_check(request):
 # Main Entry Point
 # =============================================================================
 
+# =============================================================================
+# API Key Authentication Middleware (ASGI)
+# =============================================================================
+
+
+class APIKeyMiddleware:
+    """ASGI Middleware to validate API key in request headers."""
+    
+    EXEMPT_PATHS = {"/health"}
+    
+    def __init__(self, app):
+        self.app = app
+    
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        
+        path = scope.get("path", "")
+        
+        # Skip authentication for exempt paths
+        if path in self.EXEMPT_PATHS:
+            return await self.app(scope, receive, send)
+        
+        # Skip if no API key is configured
+        if not API_KEY:
+            return await self.app(scope, receive, send)
+        
+        # Extract headers
+        headers = dict(scope.get("headers", []))
+        api_key_header = headers.get(b"x-api-key", b"").decode()
+        auth_header = headers.get(b"authorization", b"").decode()
+        
+        provided_key = api_key_header or auth_header.replace("Bearer ", "")
+        
+        if not provided_key:
+            await self._send_error(send, 401, "Missing API key. Provide X-API-Key header or Authorization: Bearer <key>")
+            return
+        
+        if provided_key != API_KEY:
+            await self._send_error(send, 403, "Invalid API key")
+            return
+        
+        return await self.app(scope, receive, send)
+    
+    async def _send_error(self, send, status_code, message):
+        """Send JSON error response."""
+        import json as _json
+        body = _json.dumps({"error": message}).encode()
+        await send({
+            "type": "http.response.start",
+            "status": status_code,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
+
+
 if __name__ == "__main__":
     logger.info("Starting PostgreSQL MCP Server...")
     logger.info(f"Database URL configured: {'Yes' if DATABASE_URL else 'No'}")
-    mcp.run(transport="streamable-http")
+    logger.info(f"API Key configured: {'Yes' if API_KEY else 'No (authentication disabled)'}")
+    
+    import uvicorn
+    
+    # Get the ASGI app from FastMCP and wrap with middleware
+    app = mcp.streamable_http_app()
+    app = APIKeyMiddleware(app)
+    
+    uvicorn.run(app, host="0.0.0.0", port=8000)

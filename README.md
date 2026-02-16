@@ -9,12 +9,13 @@ A **FastMCP-based** read-only PostgreSQL MCP (Model Context Protocol) server des
 - **Stateless Operation**: Supports horizontal scaling with session isolation
 - **Database Schema Discovery**: List tables and describe column structures
 - **Health Check Endpoint**: Container-ready with `/health` endpoint
+- **API Key Authentication**: Secure access with `X-API-Key` header or Bearer token
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `query` | Run a read-only SQL query |
+| Tool | Description | Annotations |
+|------|-------------|-------------|
+| `postgres_query` | Run a read-only SQL query | `readOnlyHint: true`, `idempotentHint: true` |
 
 ## Resources
 
@@ -50,18 +51,26 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Set the `DATABASE_URL` environment variable:
+Set the required environment variables:
 
 ```bash
 export DATABASE_URL="postgresql://user:password@host:port/database"
+export MCP_API_KEY="your-secure-api-key"  # Optional but recommended
 ```
 
 Or create a `.env` file based on `.env.example`:
 
 ```bash
 cp .env.example .env
-# Edit .env with your database credentials
+# Edit .env with your database credentials and API key
 ```
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `MCP_API_KEY` | No | API key for authentication (recommended for production) |
 
 ## Local Development
 
@@ -87,6 +96,16 @@ python mcp_client.py
 curl http://localhost:8000/health
 ```
 
+### Test with API Key
+
+```bash
+# With X-API-Key header
+curl -H "X-API-Key: your-api-key" http://localhost:8000/mcp
+
+# With Authorization Bearer
+curl -H "Authorization: Bearer your-api-key" http://localhost:8000/mcp
+```
+
 ## Docker Deployment
 
 ### Build the Image
@@ -101,6 +120,7 @@ docker build -t postgres-mcp .
 docker run -d \
   -p 8000:8000 \
   -e DATABASE_URL="postgresql://user:password@host:port/database" \
+  -e MCP_API_KEY="your-secure-api-key" \
   --name postgres-mcp \
   postgres-mcp
 ```
@@ -169,20 +189,46 @@ mcp.run(transport="streamable-http")
 
 ## Security Considerations
 
+- **API Key Authentication**: All endpoints (except `/health`) require valid API key
 - **Read-Only**: All queries execute within `BEGIN TRANSACTION READ ONLY`
 - **Connection Pooling**: Uses `asyncpg` connection pool (1-10 connections)
 - **Environment Variables**: Database credentials via environment, not hardcoded
 - **No DDL/DML**: Only SELECT and read operations are permitted
 
+### Authentication
+
+Clients must provide the API key via one of:
+- `X-API-Key` header: `X-API-Key: your-api-key`
+- `Authorization` header: `Authorization: Bearer your-api-key`
+
+The `/health` endpoint is exempt from authentication for container orchestration.
+
 ## Example Usage
 
-### Query Tool
+### postgres_query Tool
 
 ```json
 {
-  "name": "query",
+  "name": "postgres_query",
   "arguments": {
     "sql": "SELECT * FROM users LIMIT 10"
+  }
+}
+```
+
+### Windsurf MCP Configuration
+
+Add to your `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "postgresql-local": {
+      "serverUrl": "http://localhost:8000/mcp",
+      "headers": {
+        "X-API-Key": "your-api-key"
+      }
+    }
   }
 }
 ```
