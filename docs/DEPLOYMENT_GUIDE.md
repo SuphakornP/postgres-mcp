@@ -2,6 +2,161 @@
 
 This guide covers deploying the PostgreSQL MCP Server to **AWS Bedrock AgentCore Runtime** for production use.
 
+## Quick Start (Recommended Method)
+
+This is the **verified working deployment method** using AWS Bedrock AgentCore CLI with Direct Code Deploy.
+
+### Prerequisites
+
+- Python 3.10+ with virtual environment
+- AWS credentials configured (temporary credentials with session token supported)
+- AWS account with appropriate permissions
+
+### Step 1: Install AgentCore Toolkit
+
+```bash
+# Activate your virtual environment
+source .venv/bin/activate
+
+# Install the toolkit
+pip install bedrock-agentcore-starter-toolkit
+
+# Verify installation
+agentcore --help
+```
+
+### Step 2: Configure AWS Credentials
+
+Create or update `.aws/credentials` in your project directory:
+
+```ini
+[637423343847_ITDeveloperAccess]
+aws_access_key_id=YOUR_ACCESS_KEY_ID
+aws_secret_access_key=YOUR_SECRET_ACCESS_KEY
+aws_session_token=YOUR_SESSION_TOKEN  # Required for temporary credentials
+```
+
+Create or update `.aws/config`:
+
+```ini
+[profile 637423343847_ITDeveloperAccess]
+region = us-west-2
+output = json
+```
+
+### Step 3: Configure MCP Server for Deployment
+
+```bash
+# Set AWS credentials
+export AWS_SHARED_CREDENTIALS_FILE=$(pwd)/.aws/credentials
+export AWS_PROFILE=637423343847_ITDeveloperAccess
+
+# Configure the agent (use underscores, not hyphens in name)
+agentcore configure -e mcp_server.py \
+  --protocol MCP \
+  --disable-memory \
+  --name postgres_mcp \
+  --non-interactive \
+  --region us-west-2
+```
+
+This creates `.bedrock_agentcore.yaml` with your deployment configuration.
+
+### Step 4: Deploy to AWS
+
+```bash
+# Deploy using the same AWS credentials
+export AWS_SHARED_CREDENTIALS_FILE=$(pwd)/.aws/credentials
+export AWS_PROFILE=637423343847_ITDeveloperAccess
+
+agentcore deploy
+```
+
+The deployment will:
+- Create IAM execution role automatically
+- Create S3 bucket for deployment packages
+- Package and upload your code
+- Deploy to AgentCore Runtime with Direct Code Deploy (no Docker required)
+- Configure CloudWatch logging and observability
+
+### Step 5: Verify Deployment
+
+```bash
+# Check agent status
+agentcore status
+
+# View the agent ARN and endpoint details
+```
+
+**Example Output:**
+```
+Agent ARN: arn:aws:bedrock-agentcore:us-west-2:637423343847:runtime/postgres_mcp-M7k4jR9aLJ
+Endpoint: DEFAULT (READY)
+Status: Ready - Agent deployed and endpoint available
+```
+
+### Step 6: Invoke the Deployed Agent
+
+**Using AgentCore CLI:**
+```bash
+agentcore invoke '{"tool": "postgres_query", "arguments": {"sql": "SELECT 1"}}'
+```
+
+**Using Python SDK:**
+```python
+import boto3
+import json
+
+client = boto3.client('bedrock-agentcore-runtime', region_name='us-west-2')
+
+response = client.invoke_agent_runtime(
+    agentRuntimeArn='arn:aws:bedrock-agentcore:us-west-2:ACCOUNT:runtime/postgres_mcp-XXX',
+    runtimeSessionId='test-session',
+    payload=json.dumps({
+        "tool": "postgres_query",
+        "arguments": {"sql": "SELECT table_name FROM information_schema.tables LIMIT 5"}
+    }).encode()
+)
+```
+
+### Step 7: Monitor and Debug
+
+**View CloudWatch Logs:**
+```bash
+# Tail runtime logs
+aws logs tail /aws/bedrock-agentcore/runtimes/postgres_mcp-XXX-DEFAULT \
+  --log-stream-name-prefix "2026/02/17/[runtime-logs" \
+  --follow
+
+# View recent logs
+aws logs tail /aws/bedrock-agentcore/runtimes/postgres_mcp-XXX-DEFAULT \
+  --log-stream-name-prefix "2026/02/17/[runtime-logs" \
+  --since 1h
+```
+
+**GenAI Observability Dashboard:**
+```
+https://console.aws.amazon.com/cloudwatch/home?region=us-west-2#gen-ai-observability/agent-core
+```
+
+### Important Notes
+
+1. **Agent Naming:** Use underscores only (e.g., `postgres_mcp`), not hyphens
+2. **AWS Credentials:** Temporary credentials (ASIA prefix) require `AWS_SESSION_TOKEN`
+3. **Deployment Type:** Direct Code Deploy is recommended (no Docker required)
+4. **Memory:** Disabled by default with `--disable-memory` flag
+5. **Protocol:** Must specify `--protocol MCP` for MCP servers
+6. **Region:** Ensure consistent region across all commands (us-west-2)
+
+### Cleanup
+
+```bash
+# Destroy the agent and resources
+agentcore destroy
+```
+
+---
+
 ## Architecture Overview
 
 ```mermaid

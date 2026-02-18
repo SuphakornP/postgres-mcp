@@ -36,11 +36,54 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Database configuration from environment variable
-DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-# API Key configuration for security
-API_KEY = os.getenv("MCP_API_KEY", "")
+def get_secrets_from_aws():
+    """
+    Fetch secrets from AWS Secrets Manager if running in AWS environment.
+    Falls back to environment variables for local development.
+    """
+    # Check if we're in AWS environment (AgentCore sets AWS_REGION)
+    aws_region = os.getenv("AWS_REGION")
+    secret_name = "postgres-mcp/credentials"
+    
+    if aws_region and not os.getenv("DATABASE_URL"):
+        try:
+            import boto3
+            from botocore.exceptions import ClientError
+            
+            logger.info(f"Fetching secrets from AWS Secrets Manager: {secret_name}")
+            
+            # Create a Secrets Manager client
+            session = boto3.session.Session()
+            client = session.client(
+                service_name='secretsmanager',
+                region_name=aws_region
+            )
+            
+            try:
+                get_secret_value_response = client.get_secret_value(
+                    SecretId=secret_name
+                )
+            except ClientError as e:
+                logger.error(f"Error fetching secret from AWS Secrets Manager: {e}")
+                return {}, {}
+            
+            # Parse the secret
+            secret = json.loads(get_secret_value_response['SecretString'])
+            logger.info("Successfully fetched secrets from AWS Secrets Manager")
+            return secret.get('DATABASE_URL', ''), secret.get('MCP_API_KEY', '')
+            
+        except ImportError:
+            logger.warning("boto3 not installed, falling back to environment variables")
+        except Exception as e:
+            logger.error(f"Unexpected error fetching secrets: {e}")
+    
+    # Fall back to environment variables
+    return os.getenv("DATABASE_URL", ""), os.getenv("MCP_API_KEY", "")
+
+
+# Database configuration - try AWS Secrets Manager first, then environment variables
+DATABASE_URL, API_KEY = get_secrets_from_aws()
 
 # Schema path constant (matches original TypeScript)
 SCHEMA_PATH = "schema"
@@ -250,8 +293,9 @@ class APIKeyMiddleware:
         if path in self.EXEMPT_PATHS:
             return await self.app(scope, receive, send)
         
-        # Skip if no API key is configured
-        if not API_KEY:
+        # Skip if no API key is configured or running in AWS AgentCore
+        # AgentCore handles authentication at the platform level
+        if not API_KEY or os.getenv("AWS_REGION"):
             return await self.app(scope, receive, send)
         
         # Extract headers

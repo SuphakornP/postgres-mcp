@@ -94,3 +94,8 @@ logs/
 # Local configuration
 .env.local
 .env.*.local
+
+# AWS credentials and deployment configuration
+.aws/
+.bedrock_agentcore.yaml
+.bedrock_agentcore/
