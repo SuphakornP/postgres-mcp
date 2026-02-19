@@ -98,6 +98,29 @@ async def main():
                 print(f"Error: {e}")
             print()
 
+            # Test math tools
+            print("=" * 50)
+            print("Testing Math Tools:")
+            print("=" * 50)
+
+            math_tests = [
+                ("math_add",      {"a": 10, "b": 5},  "10 + 5 = 15"),
+                ("math_subtract", {"a": 10, "b": 5},  "10 - 5 = 5"),
+                ("math_multiply", {"a": 10, "b": 5},  "10 * 5 = 50"),
+                ("math_divide",   {"a": 10, "b": 5},  "10 / 5 = 2"),
+                ("math_divide",   {"a": 10, "b": 0},  "10 / 0 = error (division by zero)"),
+            ]
+
+            for tool_name, args, description in math_tests:
+                try:
+                    result = await session.call_tool(tool_name, args)
+                    print(f"  ✓ {description}")
+                    print(f"    Result: {result.content[0].text}")
+                except Exception as e:
+                    print(f"  ✗ {description}")
+                    print(f"    Error: {e}")
+            print()
+
             print("✓ MCP client test completed!")
 
 

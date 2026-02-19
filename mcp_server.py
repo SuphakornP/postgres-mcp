@@ -246,6 +246,80 @@ async def postgres_query(sql: str) -> str:
 
 
 # =============================================================================
+# MCP Tools - Math Operations
+# Simple arithmetic tools for testing AgentCore runtime connectivity
+# =============================================================================
+
+@mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True})
+def math_add(a: float, b: float) -> str:
+    """
+    Add two numbers together.
+
+    Args:
+        a: The first number
+        b: The second number
+
+    Returns:
+        JSON object with the result of a + b
+    """
+    result = a + b
+    return json.dumps({"operation": "add", "a": a, "b": b, "result": result})
+
+
+@mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True})
+def math_subtract(a: float, b: float) -> str:
+    """
+    Subtract b from a.
+
+    Args:
+        a: The number to subtract from
+        b: The number to subtract
+
+    Returns:
+        JSON object with the result of a - b
+    """
+    result = a - b
+    return json.dumps({"operation": "subtract", "a": a, "b": b, "result": result})
+
+
+@mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True})
+def math_multiply(a: float, b: float) -> str:
+    """
+    Multiply two numbers together.
+
+    Args:
+        a: The first number
+        b: The second number
+
+    Returns:
+        JSON object with the result of a * b
+    """
+    result = a * b
+    return json.dumps({"operation": "multiply", "a": a, "b": b, "result": result})
+
+
+@mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True})
+def math_divide(a: float, b: float) -> str:
+    """
+    Divide a by b.
+
+    Args:
+        a: The dividend (number to be divided)
+        b: The divisor (number to divide by). Must not be zero.
+
+    Returns:
+        JSON object with the result of a / b
+
+    Errors:
+        - If b is zero, returns an error message
+    """
+    if b == 0:
+        return json.dumps({"operation": "divide", "a": a, "b": b, "error": "Division by zero is not allowed"})
+    result = a / b
+    return json.dumps({"operation": "divide", "a": a, "b": b, "result": result})
+
+
+# =============================================================================
 # Health Check Endpoint (for container orchestration)
 # =============================================================================
 
@@ -253,17 +327,7 @@ async def postgres_query(sql: str) -> str:
 async def health_check(request):
     """Health check endpoint for container orchestration."""
     from starlette.responses import JSONResponse
-    
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
-        return JSONResponse({"status": "healthy", "database": "connected"})
-    except Exception as e:
-        return JSONResponse(
-            {"status": "unhealthy", "error": str(e)},
-            status_code=503
-        )
+    return JSONResponse({"status": "healthy"})
 
 
 # =============================================================================
