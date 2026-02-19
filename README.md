@@ -2,6 +2,26 @@
 
 A **FastMCP-based** read-only PostgreSQL MCP (Model Context Protocol) server designed for deployment on **AWS Bedrock AgentCore Runtime**.
 
+## 📋 Changelog
+
+### [1.1.0] - 2026-02-19
+
+#### Added
+- **Math utility tools**: `math_add`, `math_subtract`, `math_multiply`, `math_divide` — for testing AgentCore runtime connectivity without a database
+- **AWS Secrets Manager integration**: Automatically fetches `DATABASE_URL` and `MCP_API_KEY` from secret `postgres-mcp/credentials` when running in AWS (`AWS_REGION` is set)
+- **IAM authentication bypass**: `APIKeyMiddleware` skips `X-API-Key` validation when running inside AgentCore (IAM/SigV4 handles auth at the platform level)
+- **`mcp-proxy-for-aws` IDE integration**: Connect Windsurf/Cursor directly to the deployed AgentCore runtime via SigV4-signed local proxy (no `X-API-Key` needed from IDE)
+- **`boto3` dependency**: Added to `requirements.txt` for AWS Secrets Manager access
+- **Deployment guide**: Comprehensive `docs/DEPLOYMENT_GUIDE.md` covering CLI, CloudFormation, and manual Docker deployment options with Mermaid architecture diagrams
+- **Direct Code Deploy support**: `agentcore deploy` packages and deploys code directly — no Docker build required for AgentCore deployment
+
+#### Changed
+- Server now uses `mcp.streamable_http_app()` wrapped with `APIKeyMiddleware` ASGI middleware (previously relied on FastMCP's built-in runner)
+- `get_secrets_from_aws()` is called at startup; environment variables serve as fallback for local development
+- Resource URI pattern simplified to `postgres://schema/{table_name}` (FastMCP template format)
+
+---
+
 ## Features
 
 - **Read-Only Access**: All queries run within `READ ONLY` transactions
@@ -9,13 +29,19 @@ A **FastMCP-based** read-only PostgreSQL MCP (Model Context Protocol) server des
 - **Stateless Operation**: Supports horizontal scaling with session isolation
 - **Database Schema Discovery**: List tables and describe column structures
 - **Health Check Endpoint**: Container-ready with `/health` endpoint
-- **API Key Authentication**: Secure access with `X-API-Key` header or Bearer token
+- **API Key Authentication**: Secure access with `X-API-Key` header or Bearer token (auto-disabled in AWS)
+- **AWS Secrets Manager**: Automatic credential fetching when deployed to AgentCore
+- **Math Utility Tools**: Built-in arithmetic tools for connectivity testing
 
 ## Tools
 
 | Tool | Description | Annotations |
 |------|-------------|-------------|
-| `postgres_query` | Run a read-only SQL query | `readOnlyHint: true`, `idempotentHint: true` |
+| `postgres_query` | Run a read-only SQL SELECT query | `readOnlyHint: true`, `idempotentHint: true` |
+| `math_add` | Add two numbers (a + b) | `readOnlyHint: true`, `idempotentHint: true` |
+| `math_subtract` | Subtract two numbers (a - b) | `readOnlyHint: true`, `idempotentHint: true` |
+| `math_multiply` | Multiply two numbers (a * b) | `readOnlyHint: true`, `idempotentHint: true` |
+| `math_divide` | Divide two numbers (a / b), handles division by zero | `readOnlyHint: true`, `idempotentHint: true` |
 
 ## Resources
 
@@ -23,11 +49,11 @@ Resources are dynamically generated based on your database tables.
 
 | Resource URI Pattern | Description |
 |---------------------|-------------|
-| `postgres://user@host:port/database/table_name/schema` | Get column definitions for a table |
+| `postgres://schema/{table_name}` | Get column definitions for a table |
 
 When you call `list_resources()`, the server returns all tables in the `public` schema with URIs like:
-- `postgres://user@host:5432/mydb/users/schema`
-- `postgres://user@host:5432/mydb/orders/schema`
+- `postgres://schema/users`
+- `postgres://schema/orders`
 
 ## Prerequisites
 
@@ -71,6 +97,9 @@ cp .env.example .env
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `MCP_API_KEY` | No | API key for authentication (recommended for production) |
+| `AWS_REGION` | No (AWS only) | Set automatically by AgentCore; triggers Secrets Manager lookup and disables `X-API-Key` middleware |
+
+> **AWS Secrets Manager**: When `AWS_REGION` is set and `DATABASE_URL` is absent, the server automatically fetches credentials from the secret named `postgres-mcp/credentials` (keys: `DATABASE_URL`, `MCP_API_KEY`).
 
 ## Local Development
 
@@ -133,43 +162,56 @@ This server is designed for deployment on AWS Bedrock AgentCore Runtime.
 
 ```
 postgres-mcp/
-├── mcp_server.py          # Main MCP server
+├── mcp_server.py          # Main MCP server (FastMCP + ASGI middleware)
 ├── mcp_client.py          # Local testing client
 ├── requirements.txt       # Python dependencies
 ├── Dockerfile             # Container configuration
 ├── .env.example           # Environment template
+├── docs/
+│   └── DEPLOYMENT_GUIDE.md  # Full AgentCore deployment guide
 └── README.md              # This file
 ```
 
-### Deploy to AgentCore
+> See [`docs/DEPLOYMENT_GUIDE.md`](docs/DEPLOYMENT_GUIDE.md) for comprehensive deployment instructions including CLI, CloudFormation, and manual Docker options.
 
-1. **Install AgentCore SDK**:
+### Deploy to AgentCore (Recommended: CLI)
+
+1. **Install AgentCore Toolkit**:
    ```bash
    pip install bedrock-agentcore-starter-toolkit
    ```
 
-2. **Configure Deployment**:
-   ```python
-   from bedrock_agentcore_starter_toolkit import Runtime
-   
-   agentcore_runtime = Runtime()
-   
-   agentcore_runtime.configure(
-       entrypoint="mcp_server.py",
-       auto_create_execution_role=True,
-       auto_create_ecr=True,
-       requirements_file="requirements.txt",
-       region="us-east-1",
-       protocol="MCP",
-       agent_name="postgres-mcp"
-   )
+2. **Configure**:
+   ```bash
+   export AWS_SHARED_CREDENTIALS_FILE=$(pwd)/.aws/credentials
+   export AWS_PROFILE=<your-aws-profile>
+
+   agentcore configure -e mcp_server.py \
+     --protocol MCP \
+     --disable-memory \
+     --name postgres_mcp \
+     --non-interactive \
+     --region us-west-2
    ```
 
-3. **Launch**:
-   ```python
-   launch_result = agentcore_runtime.launch()
-   print(f"Agent ARN: {launch_result.agent_arn}")
+3. **Deploy** (Direct Code Deploy — no Docker required):
+   ```bash
+   agentcore deploy
    ```
+
+4. **Verify**:
+   ```bash
+   agentcore status
+   # Agent ARN: arn:aws:bedrock-agentcore:us-west-2:<account>:runtime/postgres_mcp-<id>
+   ```
+
+5. **Test**:
+   ```bash
+   agentcore invoke '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+   agentcore invoke '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"math_add","arguments":{"a":10,"b":5}},"id":2}'
+   ```
+
+> **Important**: Use underscores in agent name (`postgres_mcp`), not hyphens. See [`docs/DEPLOYMENT_GUIDE.md`](docs/DEPLOYMENT_GUIDE.md) for CloudFormation and manual Docker options.
 
 ### Key Configuration for AgentCore
 
@@ -183,25 +225,32 @@ mcp = FastMCP(
     stateless_http=True,  # Required for AgentCore
 )
 
-# Run with streamable-http transport
-mcp.run(transport="streamable-http")
+# Wrap with API key middleware and serve via uvicorn
+app = mcp.streamable_http_app()
+app = APIKeyMiddleware(app)
+uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
+
+- `stateless_http=True` — required for AgentCore's stateless request model
+- `APIKeyMiddleware` — automatically bypassed when `AWS_REGION` is set (AgentCore handles auth via IAM)
+- `streamable_http_app()` — exposes the MCP server at `/mcp` with streaming HTTP transport
 
 ## Security Considerations
 
-- **API Key Authentication**: All endpoints (except `/health`) require valid API key
-- **Read-Only**: All queries execute within `BEGIN TRANSACTION READ ONLY`
-- **Connection Pooling**: Uses `asyncpg` connection pool (1-10 connections)
-- **Environment Variables**: Database credentials via environment, not hardcoded
+- **API Key Authentication**: All endpoints (except `/health`) require valid API key when running locally
+- **IAM / SigV4 (AgentCore)**: When deployed to AgentCore, `X-API-Key` middleware is automatically disabled — AWS IAM handles authentication at the platform level
+- **AWS Secrets Manager**: Credentials are fetched at startup from `postgres-mcp/credentials`; never hardcoded
+- **Read-Only**: All queries execute within `BEGIN TRANSACTION READ ONLY` and are always rolled back
+- **Connection Pooling**: Uses `asyncpg` connection pool (min 1, max 10 connections, 60s timeout)
 - **No DDL/DML**: Only SELECT and read operations are permitted
 
 ### Authentication
 
-Clients must provide the API key via one of:
-- `X-API-Key` header: `X-API-Key: your-api-key`
-- `Authorization` header: `Authorization: Bearer your-api-key`
-
-The `/health` endpoint is exempt from authentication for container orchestration.
+| Context | Method |
+|---------|--------|
+| Local development | `X-API-Key` header or `Authorization: Bearer <key>` |
+| AgentCore (deployed) | IAM SigV4 via `mcp-proxy-for-aws` — no `X-API-Key` needed |
+| `/health` endpoint | Always exempt (for container orchestration) |
 
 ## Example Usage
 
@@ -216,7 +265,9 @@ The `/health` endpoint is exempt from authentication for container orchestration
 }
 ```
 
-### Windsurf MCP Configuration
+### Windsurf / IDE MCP Configuration
+
+#### Local Server
 
 Add to your `~/.codeium/windsurf/mcp_config.json`:
 
@@ -232,6 +283,33 @@ Add to your `~/.codeium/windsurf/mcp_config.json`:
   }
 }
 ```
+
+#### AWS Bedrock AgentCore (Deployed)
+
+Use [`mcp-proxy-for-aws`](https://pypi.org/project/mcp-proxy-for-aws/) to connect directly to the AgentCore runtime with SigV4 authentication — no `X-API-Key` required:
+
+```json
+{
+  "mcpServers": {
+    "agentcore-postgres-mcp": {
+      "command": "uvx",
+      "args": [
+        "mcp-proxy-for-aws@latest",
+        "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/<url-encoded-agent-arn>/invocations?qualifier=DEFAULT"
+      ],
+      "env": {
+        "AWS_PROFILE": "<your-aws-profile>",
+        "AWS_REGION": "us-west-2",
+        "AWS_SHARED_CREDENTIALS_FILE": "/path/to/postgres-mcp/.aws/credentials"
+      }
+    }
+  }
+}
+```
+
+> The Agent ARN in the URL must be URL-encoded (replace `:` with `%3A`, `/` with `%2F`). Requires `uv` installed (`brew install uv`).
+
+All 5 tools will appear in the IDE after reloading MCP servers: `postgres_query`, `math_add`, `math_subtract`, `math_multiply`, `math_divide`.
 
 ## Troubleshooting
 

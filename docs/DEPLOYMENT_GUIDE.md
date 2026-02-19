@@ -97,27 +97,32 @@ Status: Ready - Agent deployed and endpoint available
 
 ### Step 6: Invoke the Deployed Agent
 
-**Using AgentCore CLI:**
+**List available tools:**
 ```bash
-agentcore invoke '{"tool": "postgres_query", "arguments": {"sql": "SELECT 1"}}'
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
 
-**Using Python SDK:**
-```python
-import boto3
-import json
+**Call a tool (MCP JSON-RPC format):**
+```bash
+# Math tools
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"math_add","arguments":{"a":10,"b":5}},"id":2}'
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"math_subtract","arguments":{"a":10,"b":5}},"id":3}'
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"math_multiply","arguments":{"a":10,"b":5}},"id":4}'
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"math_divide","arguments":{"a":10,"b":5}},"id":5}'
 
-client = boto3.client('bedrock-agentcore-runtime', region_name='us-west-2')
-
-response = client.invoke_agent_runtime(
-    agentRuntimeArn='arn:aws:bedrock-agentcore:us-west-2:ACCOUNT:runtime/postgres_mcp-XXX',
-    runtimeSessionId='test-session',
-    payload=json.dumps({
-        "tool": "postgres_query",
-        "arguments": {"sql": "SELECT table_name FROM information_schema.tables LIMIT 5"}
-    }).encode()
-)
+# Database query
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"postgres_query","arguments":{"sql":"SELECT 1"}},"id":6}'
 ```
+
+**Available Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `postgres_query` | Run read-only SQL SELECT queries against PostgreSQL |
+| `math_add` | Add two numbers (a + b) |
+| `math_subtract` | Subtract two numbers (a - b) |
+| `math_multiply` | Multiply two numbers (a * b) |
+| `math_divide` | Divide two numbers (a / b), handles division by zero |
 
 ### Step 7: Monitor and Debug
 
@@ -147,6 +152,8 @@ https://console.aws.amazon.com/cloudwatch/home?region=us-west-2#gen-ai-observabi
 4. **Memory:** Disabled by default with `--disable-memory` flag
 5. **Protocol:** Must specify `--protocol MCP` for MCP servers
 6. **Region:** Ensure consistent region across all commands (us-west-2)
+7. **Config file:** `.bedrock_agentcore.yaml` is in `.gitignore` — do not commit it (contains account/ARN details)
+8. **Invoke format:** Always use MCP JSON-RPC format (`{"jsonrpc":"2.0","method":"tools/call",...}`) not plain JSON
 
 ### Cleanup
 
@@ -167,31 +174,41 @@ flowchart TB
         C[Custom Application]
     end
 
-    subgraph "AWS Bedrock AgentCore"
-        D[AgentCore Gateway]
-        E[AgentCore Runtime]
-        F[Cognito Authentication]
+    subgraph "Local Proxy"
+        P[mcp-proxy-for-aws]
     end
 
-    subgraph "Container Infrastructure"
-        G[ECR Repository]
-        H[postgres-mcp Container]
+    subgraph "AWS Bedrock AgentCore"
+        D[AgentCore Runtime]
+        E[IAM Auth / SigV4]
+    end
+
+    subgraph "MCP Server Code"
+        F[mcp_server.py]
+        G[postgres_query tool]
+        H[math_add / subtract / multiply / divide tools]
     end
 
     subgraph "Database Layer"
         I[(PostgreSQL RDS)]
-        J[(Aurora PostgreSQL)]
     end
 
-    A --> D
-    B --> D
-    C --> D
+    subgraph "AWS Services"
+        J[Secrets Manager]
+        K[CloudWatch Logs]
+    end
+
+    A --> P
+    B --> P
+    C --> P
+    P -->|SigV4 signed| E
+    E --> D
     D --> F
-    F --> E
-    E --> H
-    G --> H
-    H --> I
-    H --> J
+    F --> G
+    F --> H
+    G --> I
+    F --> J
+    D --> K
 ```
 
 ## Deployment Flow
@@ -200,19 +217,19 @@ flowchart TB
 sequenceDiagram
     participant Dev as Developer
     participant CLI as AgentCore CLI
-    participant ECR as AWS ECR
-    participant CF as CloudFormation
+    participant S3 as AWS S3
     participant AC as AgentCore Runtime
+    participant CW as CloudWatch
 
     Dev->>CLI: agentcore configure
     CLI->>Dev: Generate .bedrock_agentcore.yaml
     Dev->>CLI: agentcore deploy
-    CLI->>ECR: Build & Push Container
-    CLI->>CF: Create IAM Roles
-    CLI->>AC: Deploy MCP Server
+    CLI->>S3: Upload deployment package (zip)
+    CLI->>AC: Deploy via Direct Code Deploy
+    AC->>CW: Configure logging & observability
     AC->>Dev: Return Agent ARN
     Dev->>AC: agentcore invoke (test)
-    AC->>Dev: Response
+    AC->>Dev: MCP JSON-RPC Response
 ```
 
 ## Prerequisites
@@ -600,18 +617,23 @@ import json
 import uuid
 import boto3
 
-agent_arn = "arn:aws:bedrock-agentcore:us-west-2:ACCOUNT:agent-runtime/postgres-mcp"
+agent_arn = "arn:aws:bedrock-agentcore:us-west-2:637423343847:runtime/postgres_mcp-M7k4jR9aLJ"
 
-client = boto3.client('bedrock-agentcore', region_name='us-west-2')
+client = boto3.client('bedrock-agentcore-runtime', region_name='us-west-2')
 
 response = client.invoke_agent_runtime(
     agentRuntimeArn=agent_arn,
     runtimeSessionId=str(uuid.uuid4()),
     payload=json.dumps({
-        "tool": "postgres_query",
-        "arguments": {
-            "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' LIMIT 10"
-        }
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "postgres_query",
+            "arguments": {
+                "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' LIMIT 10"
+            }
+        },
+        "id": 1
     }).encode(),
     qualifier="DEFAULT"
 )
@@ -626,7 +648,11 @@ print(json.loads(''.join(content)))
 ### Using AgentCore CLI
 
 ```bash
-agentcore invoke '{"tool": "postgres_query", "arguments": {"sql": "SELECT 1"}}'
+# List tools
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+
+# Call a tool
+agentcore invoke '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"postgres_query","arguments":{"sql":"SELECT 1"}},"id":2}'
 ```
 
 ---
@@ -674,8 +700,65 @@ agentcore logs
 
 ---
 
+## Windsurf IDE Integration
+
+Connect Windsurf (or any MCP-compatible IDE) to the deployed AgentCore runtime using `mcp-proxy-for-aws`.
+
+### Prerequisites
+
+```bash
+# Verify uvx is installed (comes with uv)
+brew install uv  # or: pip install uv
+uvx --version
+```
+
+### Configuration
+
+Add the following entry to your Windsurf `mcp_config.json` (`~/.codeium/windsurf/mcp_config.json`):
+
+```json
+"agentcore-postgres-mcp": {
+  "command": "uvx",
+  "args": [
+    "mcp-proxy-for-aws@latest",
+    "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A637423343847%3Aruntime%2Fpostgres_mcp-M7k4jR9aLJ/invocations?qualifier=DEFAULT"
+  ],
+  "env": {
+    "AWS_PROFILE": "637423343847_ITDeveloperAccess",
+    "AWS_REGION": "us-west-2",
+    "AWS_SHARED_CREDENTIALS_FILE": "/path/to/postgres-mcp/.aws/credentials"
+  }
+}
+```
+
+> **Note:** The ARN in the URL must be URL-encoded. Replace `:` with `%3A` and `/` with `%2F`.
+
+### How It Works
+
+```
+Windsurf IDE → uvx mcp-proxy-for-aws → SigV4 signed HTTPS → AgentCore Runtime → MCP Server
+```
+
+- `mcp-proxy-for-aws` runs as a local stdio MCP server
+- It automatically signs requests with AWS SigV4 using your `AWS_PROFILE`
+- No `X-API-Key` needed — IAM handles authentication at the AgentCore layer
+- The MCP server's own `X-API-Key` middleware is automatically disabled when running in AWS
+
+### Verify Connection
+
+After adding the config and reloading Windsurf MCP servers, all 5 tools should appear:
+- `postgres_query`
+- `math_add`
+- `math_subtract`
+- `math_multiply`
+- `math_divide`
+
+---
+
 ## References
 
 - [AWS Bedrock AgentCore Documentation](https://docs.aws.amazon.com/bedrock-agentcore/)
 - [AgentCore Starter Toolkit](https://github.com/aws/bedrock-agentcore-starter-toolkit)
 - [AgentCore Samples](https://github.com/awslabs/amazon-bedrock-agentcore-samples)
+- [AgentCore in Action - Hosting MCP Servers](https://aws.amazon.com/th/blogs/thailand/agentcore-in-action-part1-hosting-mcp-servers-on-agentcore-runtime/)
+- [mcp-proxy-for-aws](https://pypi.org/project/mcp-proxy-for-aws/)
